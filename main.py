@@ -1,32 +1,22 @@
-from vector_store import VectorStore
-from retriever import Retriever
-from data_loader import DataLoader
+from pipeline import CRAGPipeline
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def main():
-    # Initialize components
-    vector_store = VectorStore()
-    retriever = Retriever()
-    loader = DataLoader()
-
-    # # Load and index a PDF (stored in "research" namespace)
-    # pdf_text = loader.load_pdf("sample.pdf")  # Ensure this file exists
-    # vector_store.index_documents([pdf_text], namespace="research")
-
-    # # Load and index a Webpage (stored in "web-articles" namespace)
-    # web_text = loader.load_webpage("https://en.wikipedia.org/wiki/Machine_learning")
-    # vector_store.index_documents([web_text], namespace="web-articles")
-
-    # describe_index_stats
-    vector_store.describe_index_stats()
-
-    # Query retrieval with metadata filtering
-    query = "What is coupling?"
-    metadata_filter = {"source": {"$eq": "software_design_dev"}}
+    crag = CRAGPipeline()
     
-    retrieved_docs = retriever.retrieve_relevant_docs(query, namespace="SE_Software_Engineering", metadata_filter=metadata_filter)
+    while True:
+        user_query = input("\nEnter your question (or type 'exit' to quit'): ")
+        if user_query.lower() == "exit":
+            break
 
-    print("\n🔹 **Retrieved Documents:**\n")
-    print(retrieved_docs)
+        logging.info(f"🎤 User Input: {user_query}")
+        response = crag.run(user_query)
+
+        print("\n🔹 **Response:**\n")
+        print(response)  # ✅ Always prints final response
 
 if __name__ == "__main__":
     main()
