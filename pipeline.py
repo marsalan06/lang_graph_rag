@@ -5,6 +5,10 @@ from query_rewriter import QueryRewritePipeline
 from retriever import Retriever
 from document_grader import DocumentGradingPipeline
 from response_generator import ResponseGenerationPipeline
+import matplotlib.pyplot as plt
+from PIL import Image
+from io import BytesIO
+from pydantic import BaseModel, Field  # ✅ Fix for Pydantic v2 warning
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -19,7 +23,7 @@ class GraphState(TypedDict):
 
 class CRAGPipeline:
     """
-    Implements a complete CRAG pipeline using LangGraph.
+    Implements a correct CRAG pipeline using LangGraph.
     """
 
     def __init__(self):
@@ -30,42 +34,30 @@ class CRAGPipeline:
         self.workflow = StateGraph(GraphState)
 
         # Define processing steps
-        self.workflow.add_node("rewrite_query", self.rewrite_query)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("grade_documents", self.grade_documents)
+        self.workflow.add_node("rewrite_query", self.rewrite_query)
         self.workflow.add_node("generate_response", self.generate_response)
 
-        # Define execution flow
-        self.workflow.add_edge("rewrite_query", "retrieve_documents")
+        # ✅ Corrected Execution Flow
         self.workflow.add_edge("retrieve_documents", "grade_documents")
+
         self.workflow.add_conditional_edges(
             "grade_documents",
             self.decide_next_step,
             {
-                "retry": "rewrite_query",  # Now correctly looping back if attempt count < 2
-                "generate_response": "generate_response",
-                "apology": "generate_response"
+                "generate_response": "generate_response",  # ✅ If relevant, generate response
+                "rewrite_query": "rewrite_query",  # ❌ If not relevant, rewrite and retry
+                "apology": "generate_response"  # ❌ If max retries, return apology
             }
         )
+
+        self.workflow.add_edge("rewrite_query", "retrieve_documents")  # ✅ Retry after rewriting
         self.workflow.add_edge("generate_response", END)
 
-        # Set entry point
-        self.workflow.set_entry_point("rewrite_query")
+        # ✅ Set correct entry point (starts with retrieval)
+        self.workflow.set_entry_point("retrieve_documents")
         self.app = self.workflow.compile()
-
-    def rewrite_query(self, state: GraphState) -> GraphState:
-        """
-        Rewrites the user query up to 2 times if retrieval fails.
-        """
-        logging.info(f"🔄 Rewriting query attempt {state['attempt_count'] + 1}")
-
-        rewritten_query = self.query_rewriter.run(state["query"])
-        if rewritten_query != state["query"]:  # Ensure a new query is generated
-            state["rewritten_queries"].append(rewritten_query)
-            state["query"] = rewritten_query
-
-        logging.info(f"✅ Rewritten Query: {rewritten_query}")
-        return {**state, "attempt_count": state["attempt_count"] + 1}
 
     def retrieve_documents(self, state: GraphState) -> GraphState:
         """
@@ -73,7 +65,7 @@ class CRAGPipeline:
         """
         logging.info(f"🔍 Retrieving documents for query: {state['query']}")
         metadata_filter = {"source": {"$eq": "software_design_dev"}}
-        retrieved_docs = self.retriever.retrieve_relevant_docs(state["query"],namespace="SE_Software_Engineering", metadata_filter=metadata_filter, k=3)
+        retrieved_docs = self.retriever.retrieve_relevant_docs(state["query"], namespace="SE_Software_Engineering", metadata_filter=metadata_filter, k=3)
 
         logging.info(f"📄 Retrieved {len(retrieved_docs)} documents.")
         return {**state, "retrieved_docs": retrieved_docs, "relevant_docs": []}
@@ -83,14 +75,58 @@ class CRAGPipeline:
         Filters out irrelevant documents before response generation.
         """
         logging.info("🎯 Grading retrieved documents for relevance.")
-        graded_output = self.document_grader.run(state["query"], state["retrieved_docs"])
+        query = state["query"]
+        retrieved_docs = state["retrieved_docs"]
+        relevant_docs = []
 
-        logging.info(f"✅ {len(graded_output['relevant_docs'])} relevant documents found.")
-        return {**state, "relevant_docs": graded_output["relevant_docs"]}
+        if not retrieved_docs:
+            logging.warning("⚠️ No documents retrieved. Skipping grading step.")
+            return {**state, "relevant_docs": []}
+
+        for doc in retrieved_docs:
+            try:
+                response = self.document_grader.grader_chain.invoke(
+                    {"query": query, "document": doc.page_content}
+                )
+
+                logging.info(f"📌 LLM Response: {response}")
+                print("-------response.grade-------", type(response))
+
+                if response["grade"] == "relevant":
+                    logging.info(f"✅ Document marked as relevant: {doc.page_content[:200]}...")
+                    relevant_docs.append(doc)
+                else:
+                    logging.warning(f"⚠️ Document marked as irrelevant: {doc.page_content[:200]}...")
+
+            except Exception as e:
+                logging.error(f"❌ Error grading document: {e}", exc_info=True)
+
+        logging.info(f"✅ {len(relevant_docs)} relevant documents found out of {len(retrieved_docs)} retrieved.")
+        return {**state, "relevant_docs": relevant_docs}
+
+    def rewrite_query(self, state: GraphState) -> GraphState:
+        """
+        Rewrites the user query ONLY IF previous retrieval attempts failed.
+        """
+        attempt = state["attempt_count"]
+        
+        if attempt >= 2:
+            logging.warning("⚠️ Max rewrite attempts reached. Returning apology message.")
+            return {**state, "attempt_count": attempt, "query": state["query"]}
+
+        logging.info(f"🔄 Rewriting query attempt {attempt + 1}")
+
+        rewritten_query = self.query_rewriter.run(state["query"])
+        if rewritten_query != state["query"]:
+            state["rewritten_queries"].append(rewritten_query)
+            state["query"] = rewritten_query
+
+        logging.info(f"✅ Rewritten Query: {rewritten_query}")
+        return {**state, "attempt_count": attempt + 1}
 
     def decide_next_step(self, state: GraphState) -> str:
         """
-        Decides whether to generate a response, retry query rewriting, or return an apology.
+        Decides whether to generate a response, retry retrieval, or return an apology.
         """
         if state["relevant_docs"]:
             logging.info("✅ Relevant documents found. Proceeding to response generation.")
@@ -98,9 +134,9 @@ class CRAGPipeline:
 
         if state["attempt_count"] < 2:
             logging.warning("⚠️ No relevant documents found. Retrying with a rewritten query.")
-            return "retry"
+            return "rewrite_query"
 
-        logging.warning("⚠️ Max rewrite attempts reached. Returning apology message.")
+        logging.warning("⚠️ Max retrieval attempts reached. Returning apology message.")
         return "apology"
 
     def generate_response(self, state: GraphState) -> GraphState:
@@ -115,7 +151,7 @@ class CRAGPipeline:
         else:
             response = self.response_generator.run(state["query"], state["relevant_docs"])
 
-        logging.info(f"✅ Generated response: {response[:100]}...")  # Log first 100 chars
+        logging.info(f"✅ Generated response: {response[:100]}...")
         return {**state, "response": response}
 
     def run(self, query: str) -> str:
@@ -131,23 +167,29 @@ class CRAGPipeline:
             "response": ""
         }
 
-        final_output = None  # Ensure final response is stored
+        final_response = "⚠️ No valid response found."
 
         for output in self.app.stream(inputs):
-            print("------output----", output, flush=True)
-            final_output = output  # Capture the latest state
-            print("----final output----", final_output, flush=True)
+            logging.info(f"📥 Pipeline Output: {output}")
+            # Check if the response is nested under 'generate_response'
+            if "generate_response" in output and "response" in output["generate_response"]:
+                final_response = output["generate_response"]["response"]
 
-        print("----final output type----", type(final_output), flush=True)
+        return final_response
 
-        # Ensure the final response is extracted correctly
-        if final_output and isinstance(final_output, dict):
-            for key, value in final_output.items():
-                if isinstance(value, dict) and "response" in value and value["response"]:
-                    print("-----Extracted response-----", flush=True)
-                    logging.info(f"🔹 Final Output: {value['response'][:100]}...")  # Log output
-                    return value["response"]
+def display_graph(pipeline, save_path="crag_graph.png"):
+    """
+    Generates and saves the LangGraph execution graph.
+    """
+    logging.info("📊 Generating CRAG pipeline graph...")
+    
+    plot = pipeline.app.get_graph().draw_mermaid_png()
+    img = Image.open(BytesIO(plot))
 
-        logging.warning("⚠️ No valid response found. Returning default apology message.")
-        return "⚠️ I’m sorry, I don’t have enough information on this topic."
+    img.save(save_path)
+    logging.info(f"✅ Graph saved to {save_path}")
 
+    plt.figure(figsize=(12, 8))
+    plt.imshow(img)
+    plt.axis("off")
+    plt.show(block=False)
