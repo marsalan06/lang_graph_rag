@@ -5,6 +5,7 @@ from query_rewriter import QueryRewritePipeline
 from retriever import Retriever
 from document_grader import DocumentGradingPipeline
 from response_generator import ResponseGenerationPipeline
+from input_analyzer import InputAnalyzer
 import matplotlib.pyplot as plt
 from PIL import Image
 from io import BytesIO
@@ -20,6 +21,7 @@ class GraphState(TypedDict):
     relevant_docs: list
     attempt_count: int
     response: str
+    input_type: str
 
 class CRAGPipeline:
     """
@@ -27,6 +29,7 @@ class CRAGPipeline:
     """
 
     def __init__(self):
+        self.input_analyzer = InputAnalyzer()
         self.query_rewriter = QueryRewritePipeline()
         self.retriever = Retriever()
         self.document_grader = DocumentGradingPipeline()
@@ -34,14 +37,23 @@ class CRAGPipeline:
         self.workflow = StateGraph(GraphState)
 
         # Define processing steps
+        self.workflow.add_node("analyze_input", self.analyze_input)
         self.workflow.add_node("retrieve_documents", self.retrieve_documents)
         self.workflow.add_node("grade_documents", self.grade_documents)
         self.workflow.add_node("rewrite_query", self.rewrite_query)
         self.workflow.add_node("generate_response", self.generate_response)
 
         # ✅ Corrected Execution Flow
+        # self.workflow.add_edge("analyze_input", "retrieve_documents")  # Default: proceed as a question
+        self.workflow.add_conditional_edges(
+            "analyze_input",
+            self.decide_analysis_result,
+            {
+                "retrieve_documents": "retrieve_documents",  # If input is a question
+                "generate_response": "generate_response"  # If input is a pleasantry
+            }
+        )
         self.workflow.add_edge("retrieve_documents", "grade_documents")
-
         self.workflow.add_conditional_edges(
             "grade_documents",
             self.decide_next_step,
@@ -56,9 +68,19 @@ class CRAGPipeline:
         self.workflow.add_edge("generate_response", END)
 
         # ✅ Set correct entry point (starts with retrieval)
-        self.workflow.set_entry_point("retrieve_documents")
+        self.workflow.set_entry_point("analyze_input")
         self.app = self.workflow.compile()
 
+    def analyze_input(self, state: GraphState) -> GraphState:
+        """
+        Determines if the input is a question or a pleasantry.
+        """
+        logging.info(f"🔍 Analyzing input: {state['query']}")
+        input_type = self.input_analyzer.analyze_input(state["query"])
+
+        logging.info(f"📌 Input classified as: {input_type}")
+        return {**state, "input_type": input_type}
+    
     def retrieve_documents(self, state: GraphState) -> GraphState:
         """
         Retrieves documents from Pinecone.
@@ -105,25 +127,27 @@ class CRAGPipeline:
         return {**state, "relevant_docs": relevant_docs}
 
     def rewrite_query(self, state: GraphState) -> GraphState:
-        """
-        Rewrites the user query ONLY IF previous retrieval attempts failed.
-        """
         attempt = state["attempt_count"]
-        
         if attempt >= 2:
             logging.warning("⚠️ Max rewrite attempts reached. Returning apology message.")
-            return {**state, "attempt_count": attempt, "query": state["query"]}
+            return {**state, "attempt_count": attempt}
 
         logging.info(f"🔄 Rewriting query attempt {attempt + 1}")
-
         rewritten_query = self.query_rewriter.run(state["query"])
         if rewritten_query != state["query"]:
             state["rewritten_queries"].append(rewritten_query)
-            state["query"] = rewritten_query
-
-        logging.info(f"✅ Rewritten Query: {rewritten_query}")
+            logging.info(f"✅ Rewritten Query: {rewritten_query}")
+            return {**state, "query": rewritten_query, "attempt_count": attempt + 1}
         return {**state, "attempt_count": attempt + 1}
-
+    
+    def decide_analysis_result(self, state: GraphState) -> str:
+        if state["input_type"] == "pleasantry":
+            logging.info("💬 Detected pleasantry. Proceeding to generate response.")
+            return "generate_response"
+        logging.info("❓ Detected question. Proceeding to retrieve documents.")
+        return "retrieve_documents"
+    
+    
     def decide_next_step(self, state: GraphState) -> str:
         """
         Decides whether to generate a response, retry retrieval, or return an apology.
@@ -140,19 +164,12 @@ class CRAGPipeline:
         return "apology"
 
     def generate_response(self, state: GraphState) -> GraphState:
-        """
-        Generates the final response.
-        """
         logging.info("📝 Generating response...")
-
-        if not state["relevant_docs"]:
-            response = "I’m sorry, I don’t have enough information on this topic."
-            logging.warning("⚠️ No relevant documents found. Returning apology message.")
-        else:
-            response = self.response_generator.run(state["query"], state["relevant_docs"])
-
+        # Let the response generator handle both questions and pleasantries
+        response = self.response_generator.run(state["query"], state["relevant_docs"])
         logging.info(f"✅ Generated response: {response[:100]}...")
         return {**state, "response": response}
+    
 
     def run(self, query: str) -> str:
         """
@@ -164,7 +181,8 @@ class CRAGPipeline:
             "retrieved_docs": [],
             "relevant_docs": [],
             "attempt_count": 0,
-            "response": ""
+            "response": "",
+            "input_type": ""
         }
 
         final_response = "⚠️ No valid response found."
@@ -189,7 +207,7 @@ def display_graph(pipeline, save_path="crag_graph.png"):
     img.save(save_path)
     logging.info(f"✅ Graph saved to {save_path}")
 
-    plt.figure(figsize=(12, 8))
-    plt.imshow(img)
-    plt.axis("off")
-    plt.show(block=False)
+    # plt.figure(figsize=(12, 8))
+    # plt.imshow(img)
+    # plt.axis("off")
+    # plt.show(block=False)
