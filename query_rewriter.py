@@ -16,11 +16,18 @@ class QueryRewriter:
 
         self.rewrite_prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", """You are a query rewriter that improves retrieval.
-                If a query is already optimized, modify it slightly to increase retrieval success."""),
-                ("human", "Original query: {query} \n\n Improve this query for better retrieval."),
+                ("system", """You are a helpful and friendly AI that improves user queries for better retrieval.
+                - If a query is already well-formed, make a **slight improvement** to enhance clarity.
+                - If the query is **technical**, ensure it includes relevant terminology without changing intent.
+                - If the query contains **mathematical expressions**, **derivations**, or **formulas**, **format them correctly** and ensure they remain precise.
+                - If the query contains **code**, preserve its structure while making improvements for clarity and specificity.
+                - Keep the tone natural and conversational while ensuring the query remains relevant.
+                - If the input is a greeting like "Hi" or "Hello," respond warmly instead of rewriting it.
+                - If the query contains sensitive, unethical, or inappropriate content, rewrite it into a safe and appropriate version or reject it politely."""),
+                ("human", "Original query: {query} \n\n Improve this query while keeping it natural."),
             ]
         )
+
 
         self.rewriter_chain = self.rewrite_prompt | self.llm | StrOutputParser()
 

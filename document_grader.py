@@ -41,9 +41,13 @@ class DocumentGradingPipeline:
         # ✅ Fix: Corrected prompt to prevent "missing grade" error
         self.grader_prompt = ChatPromptTemplate.from_messages(
             [
-                ("system", "You are a grader assessing document relevance. If the document's sementic sense is relevant to the query, "
-                           "grade it as 'relevant'. Otherwise, mark it as 'irrelevant'. Respond in JSON format with key grade and its value either relevant or irrelevant,"
-                            "Be relaxed in marking it interms of semantic sense"),
+                ("system", """You are an AI that evaluates whether a document is relevant to a given query.
+                - If the document is **semantically related** to the query, mark it as "relevant."
+                - Consider **broader meanings**, including synonyms, alternative phrasings, and conceptual similarities.
+                - Be **flexible** in recognizing technical terms, mathematical notations, and code snippets that match the query.
+                - If the document contains **mathematical derivations**, **formulas**, or **code snippets** that are relevant, mark it as "relevant."
+                - If the document is completely unrelated, mark it as "irrelevant."
+                - Respond in JSON format with key "grade" and value either "relevant" or "irrelevant." """),
                 ("human", "Query: {query}\n\nDocument: {document}")
             ]
         )
