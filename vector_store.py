@@ -67,7 +67,7 @@ class VectorStore:
             )
             
             logging.info(formatted_stats)
-            return formatted_stats
+            return stats  # Return the raw stats dictionary, not the formatted string
         except Exception as e:
             logging.error(f"Error retrieving index stats: {e}")
             return None

@@ -9,7 +9,7 @@ from input_analyzer import InputAnalyzer
 import matplotlib.pyplot as plt
 from PIL import Image
 from io import BytesIO
-from pydantic import BaseModel, Field  # ✅ Fix for Pydantic v2 warning
+from pydantic import BaseModel, Field
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -22,6 +22,8 @@ class GraphState(TypedDict):
     attempt_count: int
     response: str
     input_type: str
+    namespace: str  # Add namespace to state
+    metadata_filter: dict  # Add metadata_filter to state
 
 class CRAGPipeline:
     """
@@ -43,8 +45,7 @@ class CRAGPipeline:
         self.workflow.add_node("rewrite_query", self.rewrite_query)
         self.workflow.add_node("generate_response", self.generate_response)
 
-        # ✅ Corrected Execution Flow
-        # self.workflow.add_edge("analyze_input", "retrieve_documents")  # Default: proceed as a question
+        # Execution flow
         self.workflow.add_conditional_edges(
             "analyze_input",
             self.decide_analysis_result,
@@ -86,9 +87,12 @@ class CRAGPipeline:
         Retrieves documents from Pinecone.
         """
         logging.info(f"🔍 Retrieving documents for query: {state['query']}")
-        metadata_filter = {"source": {"$eq": "software_design_dev"}}
-        retrieved_docs = self.retriever.retrieve_relevant_docs(state["query"], namespace="SE_Software_Engineering", metadata_filter=metadata_filter, k=3)
-
+        retrieved_docs = self.retriever.retrieve_relevant_docs(
+            state["query"],
+            namespace=state["namespace"],
+            metadata_filter=state["metadata_filter"] or {},
+            k=5
+        )
         logging.info(f"📄 Retrieved {len(retrieved_docs)} documents.")
         return {**state, "retrieved_docs": retrieved_docs, "relevant_docs": []}
 
@@ -146,7 +150,7 @@ class CRAGPipeline:
             return "generate_response"
         logging.info("❓ Detected question. Proceeding to retrieve documents.")
         return "retrieve_documents"
-    
+        
     
     def decide_next_step(self, state: GraphState) -> str:
         """
@@ -170,10 +174,9 @@ class CRAGPipeline:
         logging.info(f"✅ Generated response: {response[:100]}...")
         return {**state, "response": response}
     
-
-    def run(self, query: str) -> str:
+    def run(self, query: str, namespace: str = "default", metadata_filter: dict = None) -> str:
         """
-        Runs the complete CRAG pipeline.
+        Runs the complete CRAG pipeline with dynamic namespace and metadata filter.
         """
         inputs = {
             "query": query,
@@ -182,7 +185,9 @@ class CRAGPipeline:
             "relevant_docs": [],
             "attempt_count": 0,
             "response": "",
-            "input_type": ""
+            "input_type": "",
+            "namespace": namespace,  # Add to initial state
+            "metadata_filter": metadata_filter or {}  # Add to initial state
         }
 
         final_response = "⚠️ No valid response found."
@@ -206,8 +211,3 @@ def display_graph(pipeline, save_path="crag_graph.png"):
 
     img.save(save_path)
     logging.info(f"✅ Graph saved to {save_path}")
-
-    # plt.figure(figsize=(12, 8))
-    # plt.imshow(img)
-    # plt.axis("off")
-    # plt.show(block=False)
