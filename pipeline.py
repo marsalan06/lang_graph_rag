@@ -9,7 +9,6 @@ from input_analyzer import InputAnalyzer
 import matplotlib.pyplot as plt
 from PIL import Image
 from io import BytesIO
-from pydantic import BaseModel, Field
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -22,8 +21,9 @@ class GraphState(TypedDict):
     attempt_count: int
     response: str
     input_type: str
-    namespace: str  # Add namespace to state
-    metadata_filter: dict  # Add metadata_filter to state
+    namespace: str
+    metadata_filter: dict
+    messages: list  # Added to track conversation history
 
 class CRAGPipeline:
     """
@@ -71,6 +71,10 @@ class CRAGPipeline:
         # ✅ Set correct entry point (starts with retrieval)
         self.workflow.set_entry_point("analyze_input")
         self.app = self.workflow.compile()
+
+    def filter_messages(self, messages: list) -> list:
+        """Keep only the last 5 messages from the conversation history."""
+        return messages[-5:] if len(messages) > 5 else messages
 
     def analyze_input(self, state: GraphState) -> GraphState:
         """
@@ -149,8 +153,7 @@ class CRAGPipeline:
             logging.info("💬 Detected pleasantry. Proceeding to generate response.")
             return "generate_response"
         logging.info("❓ Detected question. Proceeding to retrieve documents.")
-        return "retrieve_documents"
-        
+        return "retrieve_documents"   
     
     def decide_next_step(self, state: GraphState) -> str:
         """
@@ -169,14 +172,18 @@ class CRAGPipeline:
 
     def generate_response(self, state: GraphState) -> GraphState:
         logging.info("📝 Generating response...")
-        # Let the response generator handle both questions and pleasantries
-        response = self.response_generator.run(state["query"], state["relevant_docs"])
+        # Filter the message history to the last 5 messages
+        filtered_messages = self.filter_messages(state["messages"])
+        # Pass filtered messages to the response generator
+        response = self.response_generator.run(state["query"], state["relevant_docs"], messages=filtered_messages)
         logging.info(f"✅ Generated response: {response[:100]}...")
-        return {**state, "response": response}
-    
-    def run(self, query: str, namespace: str = "default", metadata_filter: dict = None) -> str:
+        # Update messages with the current query and response
+        updated_messages = filtered_messages + [{"role": "user", "content": state["query"]}, {"role": "assistant", "content": response}]
+        return {**state, "response": response, "messages": updated_messages}
+
+    def run(self, query: str, namespace: str = "default", metadata_filter: dict = None, messages: list = None) -> tuple[str, list]:
         """
-        Runs the complete CRAG pipeline with dynamic namespace and metadata filter.
+        Runs the pipeline and returns the response along with the updated message history.
         """
         inputs = {
             "query": query,
@@ -186,19 +193,21 @@ class CRAGPipeline:
             "attempt_count": 0,
             "response": "",
             "input_type": "",
-            "namespace": namespace,  # Add to initial state
-            "metadata_filter": metadata_filter or {}  # Add to initial state
+            "namespace": namespace,
+            "metadata_filter": metadata_filter or {},
+            "messages": messages or []  # Use provided messages or start empty
         }
 
         final_response = "⚠️ No valid response found."
+        final_messages = inputs["messages"]
 
         for output in self.app.stream(inputs):
             logging.info(f"📥 Pipeline Output: {output}")
-            # Check if the response is nested under 'generate_response'
-            if "generate_response" in output and "response" in output["generate_response"]:
+            if "generate_response" in output:
                 final_response = output["generate_response"]["response"]
+                final_messages = output["generate_response"]["messages"]
 
-        return final_response
+        return final_response, final_messages
 
 def display_graph(pipeline, save_path="crag_graph.png"):
     """

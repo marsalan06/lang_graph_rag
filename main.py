@@ -26,6 +26,8 @@ def main():
     # Initialize session state
     if 'history' not in st.session_state:
         st.session_state.history = []
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []  # Store conversation history for the pipeline
     if 'namespace' not in st.session_state:
         st.session_state.namespace = "default"
     if 'metadata_filter' not in st.session_state:
@@ -44,13 +46,7 @@ def main():
         # Get index stats only once and store in session state
         if "index_stats" not in st.session_state:
             st.session_state.index_stats = vector_store.describe_index_stats()
-
-        if st.session_state.index_stats and "namespaces" in st.session_state.index_stats:
-            namespaces = list(st.session_state.index_stats["namespaces"].keys())
-        else:
-            namespaces = ["default"]
-
-        # Use session state for namespace selection to prevent full reload
+        namespaces = list(st.session_state.index_stats["namespaces"].keys()) if st.session_state.index_stats and "namespaces" in st.session_state.index_stats else ["default"]
         selected_namespace = st.selectbox(
             "Select Namespace",
             options=namespaces,
@@ -71,7 +67,7 @@ def main():
             else:
                 st.session_state.metadata_filter = {}
             st.session_state.settings_applied = True
-            st.rerun()  # Updated from st.experimental_rerun()
+            st.rerun()
 
     # Chat area (only updates on new messages)
     chat_container = st.container()
@@ -86,30 +82,41 @@ def main():
     with st.container():
         user_query = st.chat_input("Type your message here...")
         if user_query:
+            current_time = datetime.now().strftime('%H:%M:%S')
             with chat_container.chat_message("user"):
-                st.write(f"**You ({datetime.now().strftime('%H:%M:%S')})**: {user_query}")
+                st.write(f"**You ({current_time})**: {user_query}")
             if user_query.lower() == "exit":
                 with chat_container.chat_message("assistant"):
-                    st.write(f"**Bot ({datetime.now().strftime('%H:%M:%S')})**: Goodbye!")
+                    st.write(f"**Bot ({current_time})**: Goodbye!")
                 st.session_state.history.append({"query": user_query, "response": "Session ended."})
+                st.session_state.messages.append({"role": "user", "content": user_query})
+                st.session_state.messages.append({"role": "assistant", "content": "Goodbye!"})
                 st.stop()
             elif user_query:
                 logging.info(f"🎤 User Input: {user_query}")
                 with st.spinner("Thinking..."):
-                    response = crag.run(user_query, namespace=st.session_state.namespace, metadata_filter=st.session_state.metadata_filter)
+                    # Pass the current message history to the pipeline
+                    response, updated_messages = crag.run(
+                        user_query,
+                        namespace=st.session_state.namespace,
+                        metadata_filter=st.session_state.metadata_filter,
+                        messages=st.session_state.messages
+                    )
                 with chat_container.chat_message("assistant"):
-                    st.write(f"**Bot ({datetime.now().strftime('%H:%M:%S')})**: {response}")
+                    st.write(f"**Bot ({current_time})**: {response}")
+                # Update session state with the new history and messages
                 st.session_state.history.append({"query": user_query, "response": response})
-                st.rerun()  # Updated from st.experimental_rerun()
+                st.session_state.messages = updated_messages
+                st.rerun()
 
     # Optional: Clear chat button
     if st.button("Clear Chat", key="clear_chat_button"):
         st.session_state.history = []
-        st.rerun()  # Updated from st.experimental_rerun()
+        st.session_state.messages = []  # Reset message history
+        st.rerun()
 
-    # Optional: Display logs
     if st.checkbox("Show Logs", key="show_logs"):
-        log_output = "\n".join([f"{record.asctime} - {record.levelname} - {record.message}" 
+        log_output = "\n".join([f"{record.asctime} - {record.levelname} - {record.message}"
                                 for record in logging.getLogger().handlers[0].buffer])
         st.text_area("Logs", log_output, height=200)
 

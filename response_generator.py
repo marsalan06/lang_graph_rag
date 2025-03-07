@@ -13,6 +13,7 @@ class GraphState(TypedDict):
     query: str
     relevant_docs: list
     response: str
+    messages: list  # Added for consistency with pipeline
 
 class ResponseGenerator:
     """
@@ -23,27 +24,28 @@ class ResponseGenerator:
         self.llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0, openai_api_key=Config.OPENAI_API_KEY)
 
         # Define response generation prompt
+        # Updated prompt with graceful fallback instruction
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a **knowledgeable and engaging AI assistant** that generates responses based on provided context.
-            - Use the provided context to **accurately answer** user questions.
-            - Keep the tone **friendly and professional**, adjusting formality based on the topic.
-            - If the context includes **mathematical equations**, **derivations**, or **formulas**, preserve their **notation and correctness**.
-            - If the query involves **coding or programming**, format your response using **proper code blocks** and ensure correctness.
+            ("system", """You are a knowledgeable and engaging AI assistant that generates responses based on provided context and conversation history.
+            - Pay close attention to the **conversation history** below. If the user provides information (e.g., "My name is X" or "I like Y"), treat it as fact and remember it for future responses.
+            - Use the conversation history and provided context to accurately answer user questions. Prioritize information from the history if it directly addresses the query.
+            - Keep the tone friendly and professional, adjusting formality based on the topic.
+            - If the context includes mathematical equations, derivations, or formulas, preserve their notation and correctness.
+            - If the query involves coding, format your response using proper code blocks and ensure correctness.
             - If the user greets you (e.g., "Hi", "Hello"), respond positively and engagingly.
-            - If you **don’t know** the answer, reply with: "Hmm, I’m not sure about that, but I’d love to help with something else!".
-            - If the query is **obscene, legal, financial, or ethical in nature**, politely decline to answer.
-            - Always base your responses strictly on the provided **context** and include citations when necessary."""),
-            ("human", "Query: {query}\n\nContext: {context}\n\nAnswer:")
+            - If you lack information to answer the query (and it’s not in the history or context), respond with a graceful, polite message indicating you don’t know, while offering to assist further.
+            - If the query is obscene, legal, financial, or ethical, politely decline to answer.
+            - Base your responses on the conversation history and context; include citations if context provides them."""),
+            ("human", "Conversation History:\n{history}\n\nQuery: {query}\n\nContext from documents: {context}\n\nAnswer:")
         ])
 
         self.response_chain = self.prompt | self.llm | StrOutputParser()
 
-    def generate_response(self, query, relevant_docs):
-        """
-        Generates the final response.
-        """
+    def generate_response(self, query, relevant_docs, messages):
         context = "\n\n".join([doc.page_content for doc in relevant_docs]) if relevant_docs else "No relevant data."
-        return self.response_chain.invoke({"query": query, "context": context})
+        # Format the conversation history as a string
+        history = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages]) if messages else "No prior conversation."
+        return self.response_chain.invoke({"query": query, "context": context, "history": history})
 
 class ResponseGenerationPipeline:
     """
@@ -63,17 +65,18 @@ class ResponseGenerationPipeline:
         self.app = self.workflow.compile()
 
     def generate_response(self, state: GraphState) -> GraphState:
-        """
-        Generates the final response based on relevant documents.
-        """
-        response = self.generator.generate_response(state["query"], state["relevant_docs"])
+        # Generate response based on relevant documents and conversation history
+        response = self.generator.generate_response(state["query"], state["relevant_docs"], state["messages"])
         return {**state, "response": response}
 
-    def run(self, query, relevant_docs):
-        """
-        Runs the response generation pipeline.
-        """
-        inputs = {"query": query, "relevant_docs": relevant_docs, "response": ""}
+    def run(self, query, relevant_docs, messages=None):
+        # Initialize state and execute pipeline
+        inputs = {
+            "query": query,
+            "relevant_docs": relevant_docs,
+            "response": "",
+            "messages": messages or []
+        }
         for output in self.app.stream(inputs):
             pass  # Process execution flow
         return output["response"]
