@@ -1,6 +1,9 @@
 import logging
 from pinecone import Pinecone
 from langchain_community.vectorstores import Pinecone as PineconeVector
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 from config import Config
 
@@ -20,6 +23,47 @@ class VectorStore:
         self.pc = Pinecone(api_key=Config.PINECONE_API_KEY, environment=Config.PINECONE_INDEX, embeddings=self.embedding_model)
         self.index = self.pc.Index(host=Config.PINECONE_INDEX_HOST)
         logging.info(f"Connected to Pinecone index: {self.index_name}")
+
+    def load_and_index_pdf(self, file_path, namespace="default", source="", chunk_size=500, chunk_overlap=50):
+        """
+        Loads a PDF, splits it into chunks, adds metadata, and indexes it into Pinecone.
+
+        Args:
+            file_path (str): Path to the uploaded PDF file.
+            namespace (str): Pinecone namespace to store the documents.
+            source (str): Metadata source value to tag the documents.
+            chunk_size (int): Size of each document chunk.
+            chunk_overlap (int): Overlap between chunks.
+        """
+        try:
+            # Load the PDF
+            loader = PyPDFLoader(file_path)
+            documents = loader.load()
+            logging.info(f"Loaded PDF from {file_path} with {len(documents)} pages.")
+
+            # Add metadata to each document
+            for doc in documents:
+                if not hasattr(doc, "metadata") or doc.metadata is None:
+                    doc.metadata = {}
+                doc.metadata["source"] = source or "Unknown"
+
+            # Split documents into chunks
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            docs = text_splitter.split_documents(documents)
+            logging.info(f"Split into {len(docs)} chunks with chunk_size={chunk_size}, chunk_overlap={chunk_overlap}.")
+
+            # Index into Pinecone
+            PineconeVector.from_documents(
+                docs,
+                index_name=self.index_name,
+                embedding=self.embedding_model,
+                namespace=namespace
+            )
+            logging.info(f"Indexed {len(docs)} documents into Pinecone namespace '{namespace}' with source '{source}'.")
+
+        except Exception as e:
+            logging.error(f"Error loading and indexing PDF: {e}")
+            raise
 
     def index_documents(self, documents, namespace="default",source_filter=""):
         """
