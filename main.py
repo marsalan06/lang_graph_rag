@@ -4,11 +4,12 @@ import logging
 from datetime import datetime
 from vector_store import VectorStore
 import os
+import uuid
+from auth import authenticate_user, register_external_user, save_session_to_firestore, load_session_from_firestore, delete_session_from_firestore
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Initialize the pipeline and vector store once (cached to avoid reinitialization)
 @st.cache_resource
 def load_pipeline():
     crag = CRAGPipeline()
@@ -19,8 +20,60 @@ def load_pipeline():
 def load_vector_store():
     return VectorStore()
 
+def display_login_register():
+    """Displays login or register UI and handles authentication."""
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())  # Set a unique session ID
+
+    st.title("Welcome to CRAG Chatbot")
+    auth_option = st.radio("Choose an option:", ("Login", "Register"), key="auth_option")
+
+    if auth_option == "Login":
+        st.subheader("Login")
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password (optional for Firebase)", type="password", key="login_password")
+        if st.button("Login", key="login_button"):
+            user_data, error_message = authenticate_user(email, password or None)
+            if user_data:
+                st.session_state.user = user_data
+                save_session_to_firestore(user_data, st.session_state.session_id)  # Use function from auth.py
+                st.success(f"Logged in as {user_data['user_email']}")
+                st.rerun()
+            else:
+                st.error(error_message or "Invalid credentials or authentication failed.")
+    
+    elif auth_option == "Register":
+        st.subheader("Register")
+        email = st.text_input("Email", key="register_email")
+        password = st.text_input("Password", type="password", key="register_password")
+        user_name = st.text_input("Username", key="register_username")
+        tenant_id = st.text_input("Tenant ID", key="register_tenant_id")
+        if st.button("Register", key="register_button"):
+            if not tenant_id:
+                st.error("Tenant ID is required for registration.")
+            else:
+                user_data, error_message = register_external_user(email, password, user_name, tenant_id)
+                if user_data:
+                    st.session_state.user = user_data
+                    save_session_to_firestore(user_data, st.session_state.session_id)  # Use function from auth.py
+                    st.success(f"Registered and logged in as {user_data['user_email']}")
+                    st.rerun()
+                else:
+                    st.error(error_message or "Registration failed.")
+
 def main():
-    # Load the pipeline and vector store
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())  # Initialize session ID
+
+    # Check for existing session in Firestore
+    if "user" not in st.session_state:
+        saved_user = load_session_from_firestore(st.session_state.session_id)  # Use function from auth.py
+        if saved_user:
+            st.session_state.user = saved_user  # Restore user session
+        else:
+            display_login_register()
+            return
+        
     crag = load_pipeline()
     vector_store = load_vector_store()
 
@@ -28,21 +81,31 @@ def main():
     if 'history' not in st.session_state:
         st.session_state.history = []
     if 'messages' not in st.session_state:
-        st.session_state.messages = []  # Store conversation history for the pipeline
+        st.session_state.messages = []
     if 'namespace' not in st.session_state:
         st.session_state.namespace = "default"
     if 'metadata_filter' not in st.session_state:
-        st.session_state.metadata_filter = {}
-    if 'settings_applied' not in st.session_state:
-        st.session_state.settings_applied = False
+        tenant_id = st.session_state.user.get("tenant_id")
+        st.session_state.metadata_filter = {"tenant_id": {"$eq": tenant_id}} if tenant_id else {}
 
     # Streamlit UI with chatbot theme
     st.title("CRAG Chatbot")
-    st.write("Chat with me! Ask a question or say something nice. Type 'exit' to stop.")
+    st.write(f"Welcome, {st.session_state.user['user_email']}! - Tenant {st.session_state.user['tenant_id']} - Chat with me! Ask a question or say something nice. Type 'exit' to stop.")
 
     # Sidebar for controls
     with st.sidebar:
         st.image("crag_graph.png", caption="CRAG Pipeline Execution Graph", use_container_width=True)
+
+        if st.button("Logout", key="logout_button"):
+            delete_session_from_firestore(st.session_state.session_id)  # Use function from auth.py
+            del st.session_state.user
+            st.session_state.history = []
+            st.session_state.messages = []
+            st.session_state.namespace = "default"
+            st.session_state.metadata_filter = {}
+            st.success("You have been logged out.")
+            st.rerun()
+
 
         # Get index stats only once and store in session state
         if "index_stats" not in st.session_state:
@@ -55,7 +118,7 @@ def main():
             key="namespace_select"
         )
 
-        # Improved metadata filter input
+        # Always show source/category filters
         metadata_keys = ["source", "category"]
         selected_key = st.selectbox("Select Metadata Key", options=metadata_keys, key="metadata_key_select")
         selected_value = st.text_input(f"Enter Value for {selected_key}", key="metadata_value_input")
@@ -63,11 +126,13 @@ def main():
         # Apply settings without full reload
         if st.button("Apply Settings", key="apply_settings"):
             st.session_state.namespace = selected_namespace
+            tenant_id = st.session_state.user.get("tenant_id")
+            new_filter = {}
+            if tenant_id:
+                new_filter["tenant_id"] = {"$eq": tenant_id}
             if selected_value:
-                st.session_state.metadata_filter = {selected_key: {"$eq": selected_value}}
-            else:
-                st.session_state.metadata_filter = {}
-            st.session_state.settings_applied = True
+                new_filter[selected_key] = {"$eq": selected_value}
+            st.session_state.metadata_filter = new_filter
             st.rerun()
         
         # File upload section
@@ -147,7 +212,7 @@ def main():
     # Optional: Clear chat button
     if st.button("Clear Chat", key="clear_chat_button"):
         st.session_state.history = []
-        st.session_state.messages = []  # Reset message history
+        st.session_state.messages = []
         st.rerun()
 
     if st.checkbox("Show Logs", key="show_logs"):

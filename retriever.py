@@ -18,13 +18,27 @@ class Retriever:
     def retrieve_relevant_docs(self, query, namespace="default", metadata_filter=None, k=3) -> list:
         try:
             query_embedding = self.embedding_model.embed_query(query)
-            response = self.index.query(namespace=namespace, vector=query_embedding, filter=metadata_filter, top_k=k, include_metadata=True)
+            logging.info(f"🔍 Querying Pinecone with namespace='{namespace}', filter={metadata_filter}, k={k}")
+            response = self.index.query(
+                namespace=namespace,
+                vector=query_embedding,
+                filter=metadata_filter or {},  # Ensure empty dict if None
+                top_k=k,
+                include_metadata=True
+            )
 
             retrieved_docs = [
-                Document(page_content=match["metadata"].get("text", "No content available"), metadata={"source": match["metadata"].get("source", "Unknown")})
+                Document(
+                    page_content=match["metadata"].get("text", "No content available"),
+                    metadata={
+                        "source": match["metadata"].get("source", "Unknown"),
+                        "tenant_id": match["metadata"].get("tenant_id")  # None if not present
+                    }
+                )
                 for match in response.get("matches", [])
             ]
 
+            logging.info(f"📄 Retrieved {len(retrieved_docs)} documents.")
             return retrieved_docs
         except Exception as e:
             logging.error(f"Error retrieving documents: {e}")

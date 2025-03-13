@@ -6,70 +6,54 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 from config import Config
+import streamlit as st
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class VectorStore:
-    """
-    Handles Pinecone initialization, document indexing, and connection management.
-    """
-
     def __init__(self):
         self.index_name = Config.PINECONE_INDEX
         self.embedding_model = OpenAIEmbeddings(openai_api_key=Config.OPENAI_API_KEY, model="text-embedding-3-small")
-
-        # Initialize Pinecone
-        self.pc = Pinecone(api_key=Config.PINECONE_API_KEY, environment=Config.PINECONE_INDEX, embeddings=self.embedding_model)
+        self.pc = Pinecone(api_key=Config.PINECONE_API_KEY)
         self.index = self.pc.Index(host=Config.PINECONE_INDEX_HOST)
         logging.info(f"Connected to Pinecone index: {self.index_name}")
 
     def load_and_index_pdf(self, file_path, namespace="default", source="", chunk_size=500, chunk_overlap=50):
-        """
-        Loads a PDF, splits it into chunks, adds metadata, and indexes it into Pinecone.
-
-        Args:
-            file_path (str): Path to the uploaded PDF file.
-            namespace (str): Pinecone namespace to store the documents.
-            source (str): Metadata source value to tag the documents.
-            chunk_size (int): Size of each document chunk.
-            chunk_overlap (int): Overlap between chunks.
-        """
         try:
-            # Load the PDF
             loader = PyPDFLoader(file_path)
             documents = loader.load()
             logging.info(f"Loaded PDF from {file_path} with {len(documents)} pages.")
 
-            # Add metadata to each document
+            tenant_id = st.session_state.user.get("tenant_id") if "user" in st.session_state else None
+
             for doc in documents:
                 if not hasattr(doc, "metadata") or doc.metadata is None:
                     doc.metadata = {}
-                doc.metadata["source"] = source or "Unknown"
+                doc.metadata.update({
+                    "source": source or "Unknown",
+                    "tenant_id": tenant_id  # None if not present
+                })
 
-            # Split documents into chunks
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
             docs = text_splitter.split_documents(documents)
             logging.info(f"Split into {len(docs)} chunks with chunk_size={chunk_size}, chunk_overlap={chunk_overlap}.")
 
-            # Index into Pinecone
             PineconeVector.from_documents(
                 docs,
                 index_name=self.index_name,
                 embedding=self.embedding_model,
                 namespace=namespace
             )
-            logging.info(f"Indexed {len(docs)} documents into Pinecone namespace '{namespace}' with source '{source}'.")
+            logging.info(f"Indexed {len(docs)} documents into Pinecone namespace '{namespace}' with source '{source}' and tenant_id '{tenant_id}'.")
 
         except Exception as e:
             logging.error(f"Error loading and indexing PDF: {e}")
             raise
 
-    def index_documents(self, documents, namespace="default",source_filter=""):
-        """
-        Embeds and indexes documents in Pinecone.
-        """
+    def index_documents(self, documents, namespace="default", source_filter=""):
         try:
+            tenant_id = st.session_state.user.get("tenant_id") if "user" in st.session_state else None
+
             vectors = []
             for i, doc in enumerate(documents):
                 embedding = self.embedding_model.embed_query(doc)
@@ -77,25 +61,24 @@ class VectorStore:
                     {
                         "id": f"doc-{i}",
                         "values": embedding,
-                        "metadata": {"source": source_filter},
+                        "metadata": {
+                            "source": source_filter or "Unknown",
+                            "tenant_id": tenant_id,  # None if not present
+                            "text": doc
+                        },
                         "namespace": namespace
                     }
                 )
 
             self.index.upsert(vectors)
-            logging.info(f"Documents indexed successfully in namespace '{namespace}'.")
+            logging.info(f"Documents indexed successfully in namespace '{namespace}' with tenant_id '{tenant_id}'.")
         except Exception as e:
             logging.error(f"Error indexing documents: {e}")
             raise
 
     def describe_index_stats(self):
-        """
-        Retrieves and prints statistics of the Pinecone index.
-        """
         try:
             stats = self.index.describe_index_stats()
-
-            # Extract key information
             total_vectors = stats.get("total_vector_count", 0)
             namespaces = stats.get("namespaces", {})
             dimensions = stats.get("dimension", "Unknown")
@@ -111,7 +94,7 @@ class VectorStore:
             )
             
             logging.info(formatted_stats)
-            return stats  # Return the raw stats dictionary, not the formatted string
+            return stats
         except Exception as e:
             logging.error(f"Error retrieving index stats: {e}")
             return None
