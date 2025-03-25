@@ -18,13 +18,22 @@ class Retriever:
     def retrieve_relevant_docs(self, query, namespace="default", metadata_filter=None, k=3) -> list:
         try:
             query_embedding = self.embedding_model.embed_query(query)
+            print("-------------query_embedding-------")
+            print(query_embedding)
+            print("-------------metadata_filter-------")
+            print(metadata_filter)
+            print("-------------k-------")
+            print(k)
+            print("-------------namespace-------")
+            print(namespace)
             response = self.index.query(namespace=namespace, vector=query_embedding, filter=metadata_filter, top_k=k, include_metadata=True)
 
             retrieved_docs = [
                 Document(page_content=match["metadata"].get("text", "No content available"), metadata={"source": match["metadata"].get("source", "Unknown")})
                 for match in response.get("matches", [])
             ]
-
+            print("-------------retrived docs-------")
+            print(retrieved_docs)
             return retrieved_docs
         except Exception as e:
             logging.error(f"Error retrieving documents: {e}")

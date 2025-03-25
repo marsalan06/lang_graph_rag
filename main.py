@@ -56,10 +56,14 @@ def main():
         )
 
         # Improved metadata filter input
-        metadata_keys = ["source", "category"]
+        metadata_keys = ["source"]
         selected_key = st.selectbox("Select Metadata Key", options=metadata_keys, key="metadata_key_select")
-        selected_value = st.text_input(f"Enter Value for {selected_key}", key="metadata_value_input")
-
+        selected_value = st.text_input(
+        f"Enter Value for {selected_key}",
+        key="metadata_value_input",
+        help="Enter only the value (e.g., 'Class_IX_Chem'), not the full filter expression."
+        )
+                
         # Apply settings without full reload
         if st.button("Apply Settings", key="apply_settings"):
             st.session_state.namespace = selected_namespace
@@ -68,6 +72,7 @@ def main():
             else:
                 st.session_state.metadata_filter = {}
             st.session_state.settings_applied = True
+            logging.info(f"Applied metadata filter: {st.session_state.metadata_filter}")
             st.rerun()
         
         # File upload section

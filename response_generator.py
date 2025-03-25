@@ -26,17 +26,20 @@ class ResponseGenerator:
         # Define response generation prompt
         # Updated prompt with graceful fallback instruction
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a knowledgeable and engaging AI assistant that generates responses based on provided context and conversation history.
-            - Pay close attention to the **conversation history** below. If the user provides information (e.g., "My name is X" or "I like Y"), treat it as fact and remember it for future responses.
-            - Use the conversation history and provided context to accurately answer user questions. Prioritize information from the history if it directly addresses the query.
-            - Keep the tone friendly and professional, adjusting formality based on the topic.
-            - If the context includes mathematical equations, derivations, or formulas, preserve their notation and correctness.
-            - If the query involves coding, format your response using proper code blocks and ensure correctness.
-            - If the user greets you (e.g., "Hi", "Hello"), respond positively and engagingly.
-            - If you lack information to answer the query (and it’s not in the history or context), respond with a graceful, polite message indicating you don’t know, while offering to assist further.
-            - If the query is obscene, legal, financial, or ethical, politely decline to answer.
-            - Base your responses on the conversation history and context; include citations if context provides them."""),
-            ("human", "Conversation History:\n{history}\n\nQuery: {query}\n\nContext from documents: {context}\n\nAnswer:")
+            ("system", """You are a helpful, knowledgeable AI assistant that answers only using the provided context and conversation history.
+                Instructions:
+                - **Strictly use** the provided `context` and `conversation history` to answer the query.
+                - Do **not** use external or prior knowledge that is not explicitly included in the context or history.
+                - If the answer cannot be derived from the context or history, respond with:
+                "I don't have enough information in the provided context to answer that. Could you clarify or provide more details?"
+                - If the user asks for code or mathematical help, you may provide accurate, well-formatted code blocks or step-by-step numerical derivations using information from the context.
+                - Format math properly (e.g., E = mc²), and wrap code in code blocks.
+                - Match the tone to the conversation—friendly and professional by default.
+                - If greeted (e.g., “Hi”, “Hello”), respond warmly and naturally.
+
+                Never guess or hallucinate. Base your answer *only* on what’s available in the context or conversation history."""),
+                ("human", "Conversation History:\n{history}\n\nQuery: {query}\n\nContext from documents: {context}\n\nAnswer:")
+
         ])
 
         self.response_chain = self.prompt | self.llm | StrOutputParser()
@@ -45,6 +48,8 @@ class ResponseGenerator:
         context = "\n\n".join([doc.page_content for doc in relevant_docs]) if relevant_docs else "No relevant data."
         # Format the conversation history as a string
         history = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages]) if messages else "No prior conversation."
+        print("----history----")
+        print(history)
         return self.response_chain.invoke({"query": query, "context": context, "history": history})
 
 class ResponseGenerationPipeline:
