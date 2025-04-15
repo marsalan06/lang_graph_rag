@@ -19,7 +19,7 @@ class Retriever:
         try:
             query_embedding = self.embedding_model.embed_query(query)
             print("-------------query_embedding-------")
-            print(query_embedding)
+            # print(query_embedding)
             print("-------------metadata_filter-------")
             print(metadata_filter)
             print("-------------k-------")

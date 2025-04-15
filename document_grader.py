@@ -38,28 +38,28 @@ class DocumentGradingPipeline:
             openai_api_key=Config.OPENAI_API_KEY
         )
 
-        # ✅ Fix: Corrected prompt to prevent "missing grade" error
-        self.grader_prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", """You are an AI that evaluates whether a document is relevant to a given query.
-                - If the document is **semantically related** to the query, mark it as "relevant."
-                - Consider **broader meanings**, including synonyms, alternative phrasings, and conceptual similarities.
-                - Be **flexible** in recognizing technical terms, mathematical notations, and code snippets that match the query.
-                - If the document contains **mathematical derivations**, **formulas**, or **code snippets** that are relevant, mark it as "relevant."
-                - If the document is completely unrelated, mark it as "irrelevant."
-                - Respond in JSON format with key "grade" and value either "relevant" or "irrelevant." """),
-                ("human", "Query: {query}\n\nDocument: {document}")
-            ]
-        )
+        self.grader_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an AI assistant for a tutoring platform. Your task is to decide whether a given document is **relevant** to a user's question.
 
-        # ✅ Fix: Use JsonOutputParser to ensure JSON response format
+                Return **only** a JSON object like:
+                {{ "grade": "relevant" }} or {{ "grade": "irrelevant" }}
+
+                ### Mark a document as "relevant" if:
+                - It explains the **same concept**, principle, rule, or formula — even with different numbers or phrasing.
+                - It gives a **similar solved example**, math problem, or code pattern that can help solve or understand the query.
+                - It offers **step-by-step reasoning**, explanations, or analogies that are **methodologically useful**.
+                - It includes **code**, equations, or logic that applies to the problem — even if not identical.
+
+                ### Mark as "irrelevant" if:
+                - It discusses **completely different topics**, unrelated examples, or unrelated theory.
+                - It includes **trivia, historical facts, or definitions** not useful for answering or solving the query.
+                - It is **conceptually unrelated** or misleading.
+
+                DO NOT explain. ONLY return JSON like: {{ "grade": "relevant" }} or {{ "grade": "irrelevant" }}"""),
+                            ("human", "Query: {query}\n\nDocument: {document}")
+        ])
+
         self.grader_chain = self.grader_prompt | self.llm | JsonOutputParser(pydantic_object=DocumentGrader)
-
-        # # Define LangGraph pipeline
-        # self.workflow = StateGraph(GraphState)
-        # self.workflow.add_node("grade_documents", self.grade_documents)
-        # self.workflow.set_entry_point("grade_documents")
-        # self.app = self.workflow.compile()
 
     def grade_documents(self, state: GraphState) -> GraphState:
         """
@@ -74,14 +74,14 @@ class DocumentGradingPipeline:
 
         for doc in retrieved_docs:
             try:
-                # ✅ Fix: Ensuring that only "query" and "document" are sent to the LLM
                 response = self.grader_chain.invoke({
                     "query": query,
                     "document": doc.page_content
                 })
-                
-                # ✅ Fix: Structured parsing ensures a valid response
-                if response.grade == "relevant":
+
+                # Handle both dict and Pydantic return types
+                grade_value = response.get("grade") if isinstance(response, dict) else response.grade
+                if grade_value == "relevant":
                     relevant_docs.append(doc)
 
             except Exception as e:

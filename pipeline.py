@@ -9,6 +9,7 @@ from input_analyzer import InputAnalyzer
 import matplotlib.pyplot as plt
 from PIL import Image
 from io import BytesIO
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -115,6 +116,8 @@ class CRAGPipeline:
 
         for doc in retrieved_docs:
             try:
+                print("-----data-----", query)
+                print("-----dociutments-----", doc.page_content)
                 response = self.document_grader.grader_chain.invoke(
                     {"query": query, "document": doc.page_content}
                 )
@@ -175,6 +178,9 @@ class CRAGPipeline:
         # Filter the message history to the last 5 messages
         filtered_messages = self.filter_messages(state["messages"])
         # Pass filtered messages to the response generator
+        print("---generate_response method logs-----")
+        print("-----filtered_messages-----", filtered_messages)
+        print("-----state-----", state)
         response = self.response_generator.run(state["query"], state["relevant_docs"], messages=filtered_messages)
         logging.info(f"✅ Generated response: {response[:100]}...")
         # Update messages with the current query and response
@@ -210,13 +216,14 @@ class CRAGPipeline:
         return final_response, final_messages
 
 def display_graph(pipeline, save_path="crag_graph.png"):
-    """
-    Generates and saves the LangGraph execution graph.
-    """
     logging.info("📊 Generating CRAG pipeline graph...")
-    
-    plot = pipeline.app.get_graph().draw_mermaid_png()
-    img = Image.open(BytesIO(plot))
 
-    img.save(save_path)
-    logging.info(f"✅ Graph saved to {save_path}")
+    try:
+        plot = pipeline.app.get_graph().draw_mermaid_png()
+        img = Image.open(BytesIO(plot))
+        img.save(save_path)
+        logging.info(f"✅ Graph saved to {save_path}")
+    except requests.exceptions.ReadTimeout:
+        logging.error("❌ Mermaid rendering timed out. Try again later or increase timeout.")
+    except Exception as e:
+        logging.error(f"❌ Failed to generate graph: {e}")
